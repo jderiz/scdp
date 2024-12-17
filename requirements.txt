@@ -17,5 +17,5 @@ scipy==1.12.0
 torch==1.13.1+cu116
 torch_ema==0.3
 tqdm==4.66.1
-mp-pyrho=0.3.0
+mp-pyrho==0.3.0
 --extra-index-url https://download.pytorch.org/whl/cu116
