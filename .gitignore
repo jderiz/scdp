@@ -1,4 +1,4 @@
-__pycache__/
+**/*__pycache__/
 .ipynb_checkpoints/
 *.py[cod]
 *.egg-info
@@ -6,3 +6,13 @@ ignored/
 *.npy
 .editorconfig
 .DS_Store
+.venv/
+**/*.npy
+**/*.npz
+*.pt
+*.lmdb
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+.idea/

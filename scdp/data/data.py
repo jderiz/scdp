@@ -1,11 +1,18 @@
+from attrs import mutable
 import numpy as np
 import torch
 from copy import deepcopy
 from scdp.common.pyg import Data
 from scdp.data.vnode import get_virtual_nodes
 from scdp.data.utils import (
-    read_pmg_pkl, read_vasp, read_cube, read_json, calculate_grid_pos, make_graph
+    read_pmg_pkl,
+    read_vasp,
+    read_cube,
+    read_json,
+    calculate_grid_pos,
+    make_graph,
 )
+
 
 class AtomicNumberTable:
     def __init__(self, zs):
@@ -22,13 +29,15 @@ class AtomicNumberTable:
 
     def z_to_index(self, atomic_number: str) -> int:
         return self.zs.index(atomic_number)
-    
+
+
 def atomic_numbers_to_indices(
     atomic_numbers: np.ndarray, z_table: AtomicNumberTable
 ) -> np.ndarray:
     "adpated from: https://github.com/ACEsuit/mace/blob/main/mace"
     to_index_fn = np.vectorize(z_table.z_to_index)
     return to_index_fn(atomic_numbers)
+
 
 def to_one_hot(indices: torch.Tensor, num_classes: int) -> torch.Tensor:
     """
@@ -47,9 +56,12 @@ def to_one_hot(indices: torch.Tensor, num_classes: int) -> torch.Tensor:
 
     return oh.view(*shape)
 
+
 class AtomicData(Data):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            *args, **kwargs
+        )  # calls pyg.Data.__init__, which is analog to torch_geometric.data.Data.__init__
 
     @classmethod
     def build_graph_with_vnodes(
@@ -69,32 +81,42 @@ class AtomicData(Data):
         device: str = "cpu",
         max_neighbors: int = 24,
         struct=None,
-    ) -> "AtomicData":        
+    ) -> "AtomicData":
         n_atom = len(atom_coords)
         if vnode_method in ["voronoi", "bond", "both"]:
             virtual_nodes = get_virtual_nodes(
-                atom_coords, cell, not disable_pbc, 
-                vnode_method, 
+                atom_coords,
+                cell,
+                not disable_pbc,
+                vnode_method,
                 vnode_factor,
                 resolution=vnode_res,
-                atom_types=atom_types, 
-                struct=struct
+                atom_types=atom_types,
+                struct=struct,
             )
         else:
             virtual_nodes = None
-            
+
         if virtual_nodes is not None:
             virtual_nodes = torch.from_numpy(virtual_nodes).float()
-            
+
             n_vnode = len(virtual_nodes)
-            atom_types = torch.cat([atom_types, torch.zeros(len(virtual_nodes), dtype=torch.long)])
+            atom_types = torch.cat(
+                [atom_types, torch.zeros(len(virtual_nodes), dtype=torch.long)]
+            )
             atom_coords = torch.cat([atom_coords, virtual_nodes])
-            is_vnode = torch.cat([torch.zeros(len(atom_coords) - len(virtual_nodes), dtype=torch.bool), 
-                                torch.ones(len(virtual_nodes), dtype=torch.bool)])
+            is_vnode = torch.cat(
+                [
+                    torch.zeros(
+                        len(atom_coords) - len(virtual_nodes), dtype=torch.bool
+                    ),
+                    torch.ones(len(virtual_nodes), dtype=torch.bool),
+                ]
+            )
         else:
             n_vnode = 0
             is_vnode = torch.zeros(n_atom, dtype=torch.bool)
-            
+
         idx_src, idx_dst, shifts, unit_shifts = make_graph(
             cell.to(device),
             atom_coords.to(device),
@@ -102,10 +124,10 @@ class AtomicData(Data):
             atom_cutoff,
             disable_pbc,
             disable_sc=True,
-            max_neigh=max_neighbors
+            max_neigh=max_neighbors,
         )
         edge_index = torch.stack([idx_src, idx_dst], dim=0)
-        
+
         indices = atomic_numbers_to_indices(atom_types, z_table=z_table)
         one_hot = to_one_hot(
             torch.tensor(indices, dtype=torch.long).unsqueeze(-1),
@@ -131,10 +153,10 @@ class AtomicData(Data):
             is_vnode=is_vnode,
             metadata=metadata,
             vnode_method=vnode_method,
-            build_method="vnode"
+            build_method="vnode",
         )
         return cls(**data_dict)
-    
+
     @classmethod
     def build_graph_with_all_probes(
         cls,
@@ -152,7 +174,7 @@ class AtomicData(Data):
     ) -> "AtomicData":
         """
         build the graph with all voxel grid (probe) coords.
-        """ 
+        """
         idx_src, idx_dst, shifts, unit_shifts = make_graph(
             cell.to(device),
             atom_coords.to(device),
@@ -162,7 +184,7 @@ class AtomicData(Data):
             disable_sc=True,
         )
         edge_index = torch.stack([idx_src, idx_dst], dim=0)
-        
+
         # consider incorporate origin here
         probe_coords = calculate_grid_pos(chg_density, cell, origin).view(-1, 3)
         idx_atom, idx_probe, p_shifts, _ = make_graph(
@@ -172,7 +194,7 @@ class AtomicData(Data):
             probe_cutoff,
             disable_pbc,
         )
-        
+
         indices = atomic_numbers_to_indices(atom_types, z_table=z_table)
         one_hot = to_one_hot(
             torch.tensor(indices, dtype=torch.long).unsqueeze(-1),
@@ -196,7 +218,7 @@ class AtomicData(Data):
             p_shifts=p_shifts,
             chg_labels=chg_density,
             metadata=metadata,
-            build_method="probe"
+            build_method="probe",
         )
         return cls(**data_dict)
 
@@ -217,17 +239,24 @@ class AtomicData(Data):
         max_neighbors: int = 24,
         device: str = "cpu",
     ):
-        assert build_method in ["probe", "vnode"], "<build_method> must be either <probe> or <vnode>."
+        assert build_method in [
+            "probe",
+            "vnode",
+        ], "<build_method> must be either <probe> or <vnode>."
         assert (fpath or (fcontent and finfo)) and not (fpath and (fcontent and finfo))
-                
+
         if fpath:
             data = read_pmg_pkl(fpath)
             metadata = fpath.split("/")[-1].split(".")[0]
         else:
-            if finfo.name.endswith((".cube", ".cube.gz", "cube.zz", ".cube.xz", "cube.lz4")):
+            if finfo.name.endswith(
+                (".cube", ".cube.gz", "cube.zz", ".cube.xz", "cube.lz4")
+            ):
                 data = read_cube(fcontent)
             # its json here
-            elif finfo.name.endswith((".json", ".json.gz", ".json.zz", ".json.xz", ".json.lz4")):
+            elif finfo.name.endswith(
+                (".json", ".json.gz", ".json.zz", ".json.xz", ".json.lz4")
+            ):
                 data = read_json(fcontent)
             else:
                 data = read_vasp(fcontent)
@@ -255,41 +284,59 @@ class AtomicData(Data):
                 vnode_res=vnode_res,
                 device=device,
                 max_neighbors=max_neighbors,
-                struct=data[-1]
+                struct=data[-1],
             )
-    
+
+    @classmethod
+    def from_dict(cls, data_dict: dict, device: str = "cpu") -> "AtomicData":
+        if "build_method" == "vnode":
+            return cls.build_graph_with_vnodes(
+                *data_dict,
+                device=device,
+            )
+        elif "build_method" == "probe":
+            return cls.build_graph_with_all_probes(
+                *data_dict[:-1],
+                metadata=data_dict[-1],
+                z_table=data_dict[-2],
+                device=device,
+            )
+        return cls(**data_dict, device=device)
+
+    @classmethod
+    def from_torch_geometric_data(cls, data: Data, device: str = "cpu") -> "AtomicData":
+        return cls.from_dict(data.__dict__, device=device)
+
     def sample_probe(self, n_probe: int = 200, use_block=False) -> Data:
         if self.build_method == "vnode":
             data = deepcopy(self)
             if use_block:
                 grid_size = self.grid_size[0]
-                side_len = grid_size * (n_probe / torch.prod(grid_size)).pow(1/3)
+                side_len = grid_size * (n_probe / torch.prod(grid_size)).pow(1 / 3)
                 start_x = torch.randint(0, grid_size[0] - side_len[0] + 1)
-                start_y= torch.randint(0, grid_size[1] - side_len[1] + 1)
+                start_y = torch.randint(0, grid_size[1] - side_len[1] + 1)
                 start_z = torch.randint(0, grid_size[2] - side_len[2] + 1)
-                data['chg_labels'] = self.chg_labels.view(
-                    *grid_size)[
-                        start_x:start_x+side_len[0], 
-                        start_y:start_y+side_len[1], 
-                        start_z:start_z+side_len[2]
-                    ].flatten()
-                data['probe_coords'] = self.probe_coords.view(
-                    *grid_size, 3)[
-                        start_x:start_x+side_len[0], 
-                        start_y:start_y+side_len[1], 
-                        start_z:start_z+side_len[2]
-                    ].view(-1, 3)
-                data['n_probe'] = torch.prod(side_len)
-                data['sampled'] = True
+                data["chg_labels"] = self.chg_labels.view(*grid_size)[
+                    start_x : start_x + side_len[0],
+                    start_y : start_y + side_len[1],
+                    start_z : start_z + side_len[2],
+                ].flatten()
+                data["probe_coords"] = self.probe_coords.view(*grid_size, 3)[
+                    start_x : start_x + side_len[0],
+                    start_y : start_y + side_len[1],
+                    start_z : start_z + side_len[2],
+                ].view(-1, 3)
+                data["n_probe"] = torch.prod(side_len)
+                data["sampled"] = True
             else:
                 n_probe_total = self.n_probe
                 sampled_probes = torch.randperm(n_probe_total)[:n_probe]
-                data['chg_labels'] = self.chg_labels[sampled_probes]
-                data['probe_coords'] = self.probe_coords[sampled_probes]
-                data['n_probe'] = n_probe
-                data['sampled'] = True
+                data["chg_labels"] = self.chg_labels[sampled_probes]
+                data["probe_coords"] = self.probe_coords[sampled_probes]
+                data["n_probe"] = n_probe
+                data["sampled"] = True
             return data
-        
+
         elif self.build_method == "probe":
             n_probe_total = self.n_probe
             sampled_probes = torch.randperm(n_probe_total)[:n_probe]
@@ -319,7 +366,13 @@ class AtomicData(Data):
                 coords=coords,
                 shifts=shifts,
                 atom_types=torch.cat(
-                    [self.atom_types, torch.zeros(n_probe, dtype=torch.long, device=self.atom_types.device)]),
+                    [
+                        self.atom_types,
+                        torch.zeros(
+                            n_probe, dtype=torch.long, device=self.atom_types.device
+                        ),
+                    ]
+                ),
                 node_attrs=node_attrs,
                 chg_labels=chg_labels,
                 cell=self.cell,
@@ -336,4 +389,6 @@ class AtomicData(Data):
                 sampled=True,
             )
         else:
-            raise NotImplementedError("Only <vnode> and <probe> build methods are supported.")
+            raise NotImplementedError(
+                "Only <vnode> and <probe> build methods are supported."
+            )
