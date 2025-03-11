@@ -6,3 +6,6 @@ ignored/
 *.npy
 .editorconfig
 .DS_Store
+data
+lmdb
+qm9_*
