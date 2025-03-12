@@ -17,6 +17,20 @@ please contact Xiang Fu (`xiangfu AT csail.mit.edu`) or open an issue if you hav
 
 ### install dependencies
 
+Create a new conda enviroment:
+
+```
+conda create -n scdp python=3.10
+conda activate scdp
+```
+
+Install RDKit:
+```
+conda install -c conda-forge rdkit
+```
+
+Install requirements:
+
 ```
 pip install --user -r requirements.txt
 ```
