@@ -1,4 +1,6 @@
 
+from rdkit import Chem
+
 from scdp.data.data import AtomicData
 from scdp.scripts.preprocess import get_atomic_number_table_from_zs
 import torch
@@ -8,31 +10,61 @@ from torch.utils.data import Dataset
 from scdp.common.pyg import DataLoader
 
 
+
 z_table = get_atomic_number_table_from_zs(np.arange(100).tolist())
 
+metadata='caffeine'
+mol_file='caffeine.sdf'
+
 device = 'cuda'
+dimensional_padding = 2.0
+resolution = 0.2
+
+bohr = 1.88973
+
+mol = Chem.MolFromMolFile(mol_file, sanitize=False, removeHs=False)
+mol_atom_types = []
+mol_pos = []
+origin = [9999.9,9999.9,9999.9]
+max_edge = [-9999.9,-9999.9,-9999.9]
+for i in range(mol.GetNumAtoms()):
+    mol_atom_types.append(mol.GetAtomWithIdx(i).GetAtomicNum())
+    pos = mol.GetConformer().GetAtomPosition(i)
+    pos = [ pos.x, pos.y, pos.z ]
+    mol_pos.append(pos)
+    for i in range(3):
+        origin[i] = min(origin[i], pos[i])
+    for i in range(3):
+        max_edge[i] = max(max_edge[i], pos[i])
+
+for i in range(3):
+    origin[i] -= dimensional_padding
+    max_edge[i] += dimensional_padding
+
 
 # atomic numbers in sequence
-atom_types = torch.tensor( [6, 1, 1, 1, 1] )
+atom_types = torch.tensor( mol_atom_types )
 # positions in angstrom
-atom_coords = torch.tensor([
-    [2.5281, 3.0918, 2.8846],
-    [2.5430, 2.0000, 2.8786],
-    [3.5525, 3.4698, 2.8769],
-    [2.0000, 3.4536, 2.0000],
-    [2.0170, 3.4440, 3.7830]
-])
+atom_coords = torch.tensor(mol_pos)
 # base vector of coordinate system
+cube_length = [ max_edge[i]-origin[i] for i in range(3) ]
 cell = torch.tensor([
-    [5.5525, 0.0000, 0.0000],
-    [0.0000, 5.4698, 0.0000],
-    [0.0000, 0.0000, 5.7830]
+    [cube_length[0], 0.0000, 0.0000],
+    [0.0000, cube_length[1], 0.0000],
+    [0.0000, 0.0000, cube_length[2]]
 ])
 # the whole block of densities, but I'll try to skip it
-chg_density = torch.zeros([56,56,56])
+chg_dimension = [ int(cube_length[i] / resolution) + 1 for i in range(3) ]
+
+print("Parsed molecule with RDKit.")
+print('\tDensity cube size:', ", ".join([f'{size:.4f}' for size in cube_length]))
+print('\tProbe dimension:', chg_dimension)
+print('\tResolution:', resolution)
+print('\tPadding:', dimensional_padding)
+
+chg_density = torch.zeros(chg_dimension)
 # is omitted during parsing as well
-origin = None
-metadata='caffeine'
+origin = torch.tensor(origin)
 
 # No virtual nodes added!
 data_object = AtomicData.build_graph_with_vnodes(
@@ -51,7 +83,7 @@ data_object = AtomicData.build_graph_with_vnodes(
                 max_neighbors=None,
                 device=device,
             )
-print(data_object)
+print("Created AtomicData object")
 
 class mol_data( Dataset ):
 
@@ -70,22 +102,40 @@ model = ChgLightningModule.load_from_checkpoint(checkpoint_path= 'qm9_none_K4L3_
 model.eval()
 model.ema.copy_to(model.parameters())
 
+pytorch_total_params = sum(p.numel() for p in model.parameters())
+
+print("Loaded model to", device)
+print("\tParameters:", pytorch_total_params)
+
 loader = DataLoader( md )
 
 with( torch.no_grad() ):
     for batch in loader:
         batch = batch.to(device)
         coeffs, expo_scaling = model.predict_coeffs(batch)
-        print(coeffs)
-        print(expo_scaling)
-
-        print(batch.n_probe)
+        print('Calculated', coeffs.shape[1], 'coefficients each for', coeffs.shape[0], 'molecules')
+        print('\tExponent scaling:', expo_scaling.shape if expo_scaling != None else 'None')
 
         pred = model.orbital_inference( batch, coeffs, expo_scaling, batch.n_probe, batch.probe_coords )
-        #with open('densities.txt', 'w') as file:
-        #    string = ""
-        #    for i in range( batch.n_probe ):
-        #        string += " " + str( pred[i].item() )
-        #        if (i + 1) % 5 == 0:
-        #            string += '\n'
-        #    file.write(string)
+        print( 'Calculated densities for', batch.n_probe.item(), 'probes' )
+
+        print('Start writing cube file...')
+        with open( metadata + '.cube', 'w') as file:
+            string = metadata + '\n' + 'Created by Paul and scdp\n'
+            string += f'{len(atom_types):4}{origin[0]*bohr:12.6f}{origin[1]*bohr:12.6f}{origin[2]*bohr:12.6f}\n'
+            for axis in range(3):
+                string += f'{chg_dimension[axis]:4}'
+                for xyz in range(3):
+                    string += f'{cell[axis][xyz].item()*bohr/chg_dimension[axis]:12.6f}'
+                string += '\n'
+            for atom in range( len(atom_types) ):
+                string += f'{atom_types[atom].item():4}{0.0:12.6f}'
+                for coord in range(3):
+                    string += f'{atom_coords[atom][coord].item()*bohr:12.6f}'
+                string += '\n'
+            for i in range( batch.n_probe ):
+                string += f'{pred[i].item():14.6e}'
+                if (i + 1) % 6 == 0:
+                    string += '\n'
+            file.write(string)
+        print('Done.')

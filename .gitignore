@@ -9,3 +9,5 @@ ignored/
 raw_data
 lmdb_data
 qm9_*
+*.sdf
+*.cube
