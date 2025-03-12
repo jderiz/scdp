@@ -10,7 +10,7 @@ from scdp.common.pyg import DataLoader
 
 z_table = get_atomic_number_table_from_zs(np.arange(100).tolist())
 
-device = 'cpu'
+device = 'cuda'
 
 # atomic numbers in sequence
 atom_types = torch.tensor( [6, 1, 1, 1, 1] )
@@ -66,7 +66,7 @@ class mol_data( Dataset ):
 
 md = mol_data( [data_object] )
 
-model = ChgLightningModule.load_from_checkpoint(checkpoint_path='/home/eisenpaul/Projects/scdp/qm9_none_K4L3_beta_2.0/epoch=59-step=464400.ckpt')
+model = ChgLightningModule.load_from_checkpoint(checkpoint_path= 'qm9_none_K4L3_beta_2.0/epoch=59-step=464400.ckpt').to(device)
 model.eval()
 model.ema.copy_to(model.parameters())
 
@@ -74,6 +74,7 @@ loader = DataLoader( md )
 
 with( torch.no_grad() ):
     for batch in loader:
+        batch = batch.to(device)
         coeffs, expo_scaling = model.predict_coeffs(batch)
         print(coeffs)
         print(expo_scaling)
