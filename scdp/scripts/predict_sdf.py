@@ -13,12 +13,16 @@ from scdp.common.pyg import DataLoader
 
 z_table = get_atomic_number_table_from_zs(np.arange(100).tolist())
 
-metadata='caffeine'
-mol_file='caffeine.sdf'
+#metadata='caffeine'
+#mol_file='caffeine.sdf'
+
+
+metadata='test'
+mol_file='/home/iwe20/Projects/scdp/experiments/1.001_100.sdf'
 
 device = 'cuda'
 dimensional_padding = 2.0
-resolution = 0.2
+resolution = 0.1
 
 bohr = 1.88973
 
@@ -113,7 +117,7 @@ with( torch.no_grad() ):
     for batch in loader:
         batch = batch.to(device)
         coeffs, expo_scaling = model.predict_coeffs(batch)
-        print('Calculated', coeffs.shape[1], 'coefficients each for', coeffs.shape[0], 'molecules')
+        print('Calculated', coeffs.shape[1], 'coefficients each for', coeffs.shape[0], 'atoms')
         print('\tExponent scaling:', expo_scaling.shape if expo_scaling != None else 'None')
 
         pred = model.orbital_inference( batch, coeffs, expo_scaling, batch.n_probe, batch.probe_coords )
