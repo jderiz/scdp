@@ -40,7 +40,7 @@ python scdp/scripts/viz.py \
     --db_path "/media/drive/qm9/lmdb_test/data.0000.lmdb" \
     --results_path "out.npz" \
     --show_probes True \
-    --num_molecules 1
+    --num_molecules 2
 
 if [ $? -ne 0 ]; then
     echo "Visualization failed!"

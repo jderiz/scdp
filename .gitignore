@@ -16,3 +16,9 @@ ignored/
 *.tar.bz2
 *.tar.xz
 .idea/
+raw_data
+lmdb_data
+qm9_*
+*.sdf
+*.cube
+experiments
