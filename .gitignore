@@ -7,6 +7,7 @@ ignored/
 .editorconfig
 .DS_Store
 .venv/
+*.env
 **/*.npy
 **/*.npz
 *.pt
@@ -23,3 +24,6 @@ qm9_*
 *.cube
 experiments
 *.coeffs
+*.png
+.cursor
+.vscode
