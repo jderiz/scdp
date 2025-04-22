@@ -27,3 +27,5 @@ experiments
 *.png
 .cursor
 .vscode
+.mypy_cache
+*.code-workspace

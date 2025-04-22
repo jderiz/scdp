@@ -9,6 +9,19 @@ from torch.utils.data import Dataset
 from scdp.common.pyg import DataLoader
 from scdp.data.data import AtomicData
 from scdp.model.module import ChgLightningModule
+from scdp.scripts.coeff_transform_utils import (
+    compare_transformations,
+    extract_l_mapping,
+    predict_transformed_coeffs_translation,
+)
+from scdp.scripts.plotting_helpers import (
+    analyze_by_l_value,
+    analyze_coefficient_stability,
+    compare_coefficient_pairs,
+    plot_coefficient_stability,
+    plot_isclose_analysis,
+    plot_transformation_comparison,
+)
 from scdp.scripts.preprocess import get_atomic_number_table_from_zs
 
 plt.rcParams["xtick.labelsize"] = 18
@@ -24,7 +37,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dimensional_padding = 2.0
     resolution = 0.25
-    translation_distance = 2.0  # Distance to translate in Angstroms
+    translation_distance = 0.5  # Distance to translate in Angstroms
 
     # Constants
     bohr = 1.88973
@@ -210,172 +223,29 @@ def main():
     coeff_to_l_mapping = extract_l_mapping(model, atom_types)
 
     # Analyze coefficient stability across translations
-    analyze_coefficient_stability(all_coeffs_tensor, atom_types, coeff_to_l_mapping)
+    relative_std, invariant_mask, l_value_stats = analyze_coefficient_stability(
+        all_coeffs_tensor, atom_types, coeff_to_l_mapping
+    )
+
+    # Visualize coefficient stability
+    plot_coefficient_stability(
+        relative_std,
+        title="Coefficient Stability Under Translation",
+        filename="translation_coefficient_stability.png",
+    )
 
     # Create comprehensive visualization comparing all translations
     create_comprehensive_visualization(
         all_coeffs_tensor, atom_types, coeff_to_l_mapping, translations
     )
-    
+
     # Perform isclose analysis comparing translation to reference (no translation)
-    analyze_isclose(all_coeffs_tensor, atom_types, coeff_to_l_mapping)
+    analyze_isclose_translations(all_coeffs_tensor, atom_types, coeff_to_l_mapping)
 
-
-def extract_l_mapping(model, atom_types):
-    """
-    Extract mapping from coefficient indices to L values from the model.
-
-    This function maps each coefficient to its corresponding angular momentum (L) value,
-    which is essential for understanding which types of orbitals (s, p, d, f, etc.)
-    are more invariant under translation.
-
-    Args:
-        model: ChgLightningModule with orbital information
-        atom_types: Tensor of atom types in the molecule
-
-    Returns:
-        Dictionary mapping atom types to list of L values for each coefficient
-    """
-    # Initialize the result dictionary
-    coeff_to_l = {}
-
-    # Process each unique atom type
-    unique_atom_types = torch.unique(atom_types)
-
-    for atom_type in unique_atom_types:
-        atom_type_int = atom_type.item()
-        # Get the Gaussian Type Orbital (GTO) object for this atom type
-        gto = model.gto_dict[str(atom_type_int)]
-
-        # Extract L values for each coefficient
-        l_values = []
-
-        # The orbital indexing is based on angular momentum (L) (s, p, d, f, etc.)
-        # For each L value, there are 2L+1 coefficients (corresponding to m = -L, -L+1, ..., L-1, L)
-        for l in range(gto.Lmax + 1):
-            # Get number of orbitals with this L value
-            n_orbs = gto.n_orbitals_per_L[l].item()
-            # Each orbital with angular momentum L has 2L+1 coefficients
-            for _ in range(n_orbs):
-                for _ in range(2 * l + 1):
-                    l_values.append(l)
-
-        coeff_to_l[atom_type_int] = l_values
-
-        # Additional check: verify that the number of coefficients matches
-        # with the number in the model's orbital index
-        orb_index = model.orb_index[atom_type_int]
-        num_coeffs = orb_index.sum().item()
-
-        if len(l_values) != num_coeffs:
-            print(
-                f"Warning: Mismatch for atom type {atom_type_int}: {len(l_values)} L values but {num_coeffs} coefficients"
-            )
-            # Try to recover by creating a default mapping
-            coeff_to_l[atom_type_int] = [0] * num_coeffs
-
-    return coeff_to_l
-
-
-def analyze_coefficient_stability(all_coeffs, atom_types, coeff_to_l_mapping):
-    """
-    Analyze how coefficients change under translation and identify invariant coefficients.
-
-    This function calculates the stability of each coefficient under translation and
-    performs detailed analysis based on atom types and angular momentum values.
-
-    Args:
-        all_coeffs: Tensor of shape [num_translations, num_atoms, num_coefficients]
-        atom_types: Tensor of atom types
-        coeff_to_l_mapping: Dictionary mapping atom types to L values for each coefficient
-    """
-    num_translations, num_atoms, num_coeffs = all_coeffs.shape
-
-    # Calculate standard deviation for each coefficient across translations
-    # This measures how much each coefficient varies across different translations
-    coeff_std = torch.std(all_coeffs, dim=0)  # [num_atoms, num_coeffs]
-
-    # Calculate mean absolute value of coefficients
-    # This gives a measure of the coefficient's magnitude
-    coeff_abs_mean = torch.mean(torch.abs(all_coeffs), dim=0)  # [num_atoms, num_coeffs]
-
-    # Calculate relative standard deviation (coefficient of variation)
-    # This normalizes the standard deviation by the mean magnitude
-    # Small values indicate coefficients that are stable under translation
-    epsilon = 1e-10  # Small constant to prevent division by zero
-    relative_std = coeff_std / (coeff_abs_mean + epsilon)
-
-    # Consider a coefficient "invariant" if its relative standard deviation is below threshold
-    invariance_threshold = 0.01  # 1% variation is the threshold for invariance
-    invariant_mask = relative_std < invariance_threshold
-
-    # For each atom, count how many coefficients are invariant
-    invariant_counts = invariant_mask.sum(dim=1)
-
-    print("\nCoefficient Stability Analysis:")
-    print("================================")
-
-    # Per-atom analysis
-    for i in range(num_atoms):
-        atom_type = atom_types[i].item()
-        count = invariant_counts[i].item()
-        percentage = 100 * count / num_coeffs
-        print(
-            f"Atom {i} (Z={atom_type}): {count}/{num_coeffs} ({percentage:.2f}%) coefficients are invariant to translation"
-        )
-
-    # Overall statistics
-    total_invariant = invariant_mask.sum().item()
-    total_coeffs = num_atoms * num_coeffs
-    print(
-        f"\nOverall: {total_invariant}/{total_coeffs} ({100*total_invariant/total_coeffs:.2f}%) coefficients are invariant to translation"
+    # Compare with theoretical predictions (coefficients should be invariant to translation)
+    compare_with_theoretical_predictions(
+        model, all_coeffs_tensor, translations, atom_types, coeff_to_l_mapping, device
     )
-
-    # Group coefficients by atom type
-    atom_types_unique = torch.unique(atom_types)
-    for atom_type in atom_types_unique:
-        mask = atom_types == atom_type
-        type_invariant = invariant_mask[mask].sum().item()
-        type_total = mask.sum().item() * num_coeffs
-        print(
-            f"Atom type Z={atom_type.item()}: {type_invariant}/{type_total} ({100*type_invariant/type_total:.2f}%) coefficients are invariant"
-        )
-
-    # Analysis by angular momentum
-    print("\nAnalysis by Angular Momentum (L):")
-    print("================================")
-
-    # Collect statistics per L value
-    l_value_stats = {}
-
-    for i in range(num_atoms):
-        atom_type = atom_types[i].item()
-
-        if atom_type not in coeff_to_l_mapping:
-            continue
-
-        l_values = coeff_to_l_mapping[atom_type]
-
-        # Create or append to the statistics for each L value
-        for j, l in enumerate(l_values):
-            if j >= invariant_mask.shape[1]:
-                continue
-
-            if l not in l_value_stats:
-                l_value_stats[l] = {"total": 0, "invariant": 0}
-
-            l_value_stats[l]["total"] += 1
-            if invariant_mask[i, j]:
-                l_value_stats[l]["invariant"] += 1
-
-    # Print statistics for each L value
-    for l, stats in sorted(l_value_stats.items()):
-        percentage = (
-            100 * stats["invariant"] / stats["total"] if stats["total"] > 0 else 0
-        )
-        print(
-            f"L={l}: {stats['invariant']}/{stats['total']} ({percentage:.2f}%) coefficients are invariant"
-        )
 
 
 def create_comprehensive_visualization(
@@ -507,11 +377,10 @@ def create_comprehensive_visualization(
     print("\nComprehensive translation analysis saved as 'translation_analysis.png'")
 
 
-# Add a new function for isclose analysis
-def analyze_isclose(all_coeffs, atom_types, coeff_to_l_mapping):
+def analyze_isclose_translations(all_coeffs, atom_types, coeff_to_l_mapping):
     """
     Perform isclose analysis comparing all translations to the reference (no translation).
-    
+
     Args:
         all_coeffs: Tensor of shape [num_translations, num_atoms, num_coefficients]
         atom_types: Tensor of atom types
@@ -519,129 +388,107 @@ def analyze_isclose(all_coeffs, atom_types, coeff_to_l_mapping):
     """
     # Use the first coefficient set (identity/no translation) as reference
     reference_coeffs = all_coeffs[0]
-    
+
     # Define translation names for labeling
     translation_names = ["No translation (reference)"]
     translation_names.extend([f"Axis {i}" for i in range(1, 7)])
     translation_names.extend([f"Random {i}" for i in range(7, all_coeffs.shape[0])])
-    
+
     # Create a grid of isclose results for all translations vs. reference
     # We'll focus on the first 6 translations for better visualization
     max_trans_to_show = min(7, all_coeffs.shape[0])
-    close_masks = []
-    
-    for i in range(1, max_trans_to_show):
-        current_coeffs = all_coeffs[i]
-        # Use torch.isclose with relative and absolute tolerances
-        close_mask = torch.isclose(reference_coeffs, current_coeffs, atol=1e-2, rtol=1e-2)
-        close_masks.append(close_mask)
-    
-    # Stack close masks to create a 3D tensor: [num_translations-1, num_atoms, num_coeffs]
-    close_masks_tensor = torch.stack(close_masks)
-    
-    # Create a figure
-    plt.figure(figsize=(15, 12))
-    
-    # 1. Heatmap showing which coefficients remain close under each translation
-    # Combine all close masks to show average stability across translations
-    avg_close_mask = torch.mean(close_masks_tensor.float(), dim=0)
-    
-    plt.subplot(2, 1, 1)
-    plt.imshow(avg_close_mask.numpy(), aspect='auto', cmap='Blues', vmin=0, vmax=1)
-    cbar = plt.colorbar()
-    cbar.set_label('Fraction of Translations where Coefficient Remains Close')
-    plt.xlabel('Coefficient Index', fontsize=16)
-    plt.ylabel('Atom Index', fontsize=16)
-    plt.title('Coefficient Stability Across All Translations (IsClose Analysis)', fontsize=18)
-    
-    # Add L value annotations for selected atoms if number of atoms is reasonable
-    if len(atom_types) <= 5:
-        for atom_idx in range(min(5, len(atom_types))):
-            atom_type = atom_types[atom_idx].item()
-            if atom_type in coeff_to_l_mapping:
-                l_values = coeff_to_l_mapping[atom_type]
-                
-                # Add text annotations for L values at regular intervals
-                step = max(1, len(l_values) // 10)  # Show at most 10 labels
-                for j in range(0, len(l_values), step):
-                    if j < avg_close_mask.shape[1]:
-                        plt.text(
-                            j,
-                            atom_idx,
-                            f"L={l_values[j]}",
-                            fontsize=8,
-                            ha="center",
-                            va="center",
-                            color="black" if avg_close_mask[atom_idx, j] > 0.5 else "white",
-                        )
-    
-    # 2. Translation-specific heatmap 
-    plt.subplot(2, 1, 2)
-    
-    # Reshape close_masks_tensor for visualization
-    # We want to show translations (y-axis) vs atoms and coefficients (flattened on x-axis)
-    num_trans, num_atoms, num_coeffs = close_masks_tensor.shape
-    
-    # For better visualization, we'll sample a subset of coefficients
-    # rather than showing all of them
-    sample_step = max(1, num_coeffs // 40)  # Show at most 40 coefficients per atom
-    sampled_coeffs = []
-    coeff_labels = []
-    
-    for atom_idx in range(num_atoms):
-        for coeff_idx in range(0, num_coeffs, sample_step):
-            sampled_coeffs.append(close_masks_tensor[:, atom_idx, coeff_idx])
-            atom_type = atom_types[atom_idx].item()
-            
-            # Add L value if available
-            l_value = "?"
-            if atom_type in coeff_to_l_mapping:
-                l_values = coeff_to_l_mapping[atom_type]
-                if coeff_idx < len(l_values):
-                    l_value = l_values[coeff_idx]
-                    
-            coeff_labels.append(f"A{atom_idx}:C{coeff_idx}\n(L={l_value})")
-    
-    # Stack sampled coefficients side by side
-    sampled_data = torch.stack(sampled_coeffs, dim=1)
-    
-    # Plot the heatmap
-    plt.imshow(sampled_data.numpy(), aspect='auto', cmap='Blues', vmin=0, vmax=1)
-    cbar = plt.colorbar(ticks=[0, 1])
-    cbar.set_ticklabels(['Different', 'Close'])
-    
-    # Label axes
-    plt.xlabel('Atom:Coefficient (L value)', fontsize=16)
-    plt.ylabel('Translation', fontsize=16)
-    plt.title('Coefficients Remaining Close Under Different Translations', fontsize=18)
-    
-    # Set x-axis ticks
-    if len(coeff_labels) <= 40:
-        plt.xticks(range(len(coeff_labels)), coeff_labels, rotation=90, fontsize=8)
-    else:
-        # If we have too many labels, show a subset
-        tick_indices = np.linspace(0, len(coeff_labels)-1, 40, dtype=int)
-        plt.xticks(tick_indices, [coeff_labels[i] for i in tick_indices], rotation=90, fontsize=8)
-    
-    # Set y-axis ticks
-    plt.yticks(range(num_trans), translation_names[1:max_trans_to_show])
-    
-    # Add summary statistics above the plot
-    total_close = close_masks_tensor.sum().item()
-    total_elements = close_masks_tensor.numel()
-    percentage = 100 * total_close / total_elements
-    
-    plt.suptitle(
-        f"IsClose Analysis: {total_close}/{total_elements} ({percentage:.2f}%) "
-        f"coefficients remain close across all translations",
-        fontsize=20,
-        y=0.98
+
+    # Analyze the first axis translation as an example
+    if all_coeffs.shape[0] > 1:
+        close_mask, rel_diff = compare_coefficient_pairs(
+            reference_coeffs,
+            all_coeffs[1],
+            title_prefix="No translation vs +X translation",
+        )
+
+        l_value_stats = analyze_by_l_value(close_mask, atom_types, coeff_to_l_mapping)
+
+        # Create isclose visualization
+        plot_isclose_analysis(
+            close_mask,
+            atom_types,
+            coeff_to_l_mapping,
+            l_value_stats,
+            title_prefix="Translation Analysis",
+            filename="isclose_translation_analysis.png",
+        )
+
+
+def compare_with_theoretical_predictions(
+    model, all_coeffs_tensor, translations, atom_types, coeff_to_l_mapping, device
+):
+    """
+    Compare actual translated coefficients with theoretical predictions.
+    For true GTO orbitals, coefficients should be invariant under translation.
+
+    Args:
+        model: The trained ChgLightningModule instance
+        all_coeffs_tensor: Tensor of shape [num_translations, num_atoms, num_coefficients]
+                          containing all predicted coefficients
+        translations: List of translation vectors
+        atom_types: Tensor of atom types
+        coeff_to_l_mapping: Dictionary mapping atom types to L values for each coefficient
+        device: Device to perform computations on
+    """
+    # Use the coefficients from the first translation (index 0) as the reference
+    reference_coeffs = all_coeffs_tensor[0]  # No translation
+
+    # Initialize arrays to store comparison metrics
+    num_translations = len(translations)
+    agreement_percentages = []
+    mean_rel_diffs = []
+    max_rel_diffs = []
+    translation_labels = []
+
+    # Skip the first translation (identity/no translation)
+    translation_indices = range(1, min(7, num_translations))
+
+    for i in translation_indices:
+        translation_vector = translations[i].cpu().numpy()
+        actual_coeffs = all_coeffs_tensor[i]
+
+        # Create label for this translation
+        translation_name = f"Translation {i} ({translations[i][0]:.2f}, {translations[i][1]:.2f}, {translations[i][2]:.2f})"
+        translation_labels.append(translation_name)
+
+        # Predict the theoretical coefficients - should be invariant to translation
+        theo_coeffs = predict_transformed_coeffs_translation(
+            model=model,
+            coeffs_original=reference_coeffs,
+            translation_vector=translation_vector,
+            device=device,
+        )
+
+        # Compare theoretical predictions with actual translated coefficients
+        close_mask, agreement_percentage, mean_rel_diff, max_rel_diff, l_value_stats = (
+            compare_transformations(
+                theo_coeffs.cpu(),
+                actual_coeffs,
+                atom_types,
+                coeff_to_l_mapping,
+                transformation_name=f"Translation {translation_name}",
+            )
+        )
+
+        # Store metrics
+        agreement_percentages.append(agreement_percentage)
+        mean_rel_diffs.append(mean_rel_diff)
+        max_rel_diffs.append(max_rel_diff)
+
+    # Create comparison visualization for all translations
+    plot_transformation_comparison(
+        agreement_percentages,
+        mean_rel_diffs,
+        max_rel_diffs,
+        translation_labels,
+        title_prefix="Theoretical vs. Actual Translations",
+        filename="theoretical_vs_actual_translation_comparison.png",
     )
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.savefig("isclose_translation_analysis.png")
-    print("\nIsClose translation analysis saved as 'isclose_translation_analysis.png'")
 
 
 if __name__ == "__main__":
