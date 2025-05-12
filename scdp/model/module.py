@@ -90,7 +90,7 @@ class ChgLightningModule(LightningModule):
         """
         predict coefficient for GTO basis functions.
         """
-        coeffs, expo_scaling = self.model(batch)
+        coeffs, expo_scaling, embeddings = self.model(batch)
         
         n_orbs = self.n_orbitals[
             (batch.atom_types.repeat(len(self.unique_atom_types), 1).T == 
@@ -103,7 +103,7 @@ class ChgLightningModule(LightningModule):
             # range from 0.5 to 2.0
             expo_scaling = 1.5 / (1 + torch.exp(-expo_scaling + math.log(2))) + 0.5
         
-        return coeffs, expo_scaling
+        return coeffs, expo_scaling, embeddings
     
     def orbital_inference(self, batch, coeffs, expo_scaling, n_probe, probe_coords):
         """

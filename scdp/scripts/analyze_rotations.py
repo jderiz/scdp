@@ -1,4 +1,5 @@
 import os
+import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,9 +20,15 @@ from scdp.scripts.plotting_helpers import (
     analyze_by_l_value,
     analyze_coefficient_stability,
     compare_coefficient_pairs,
+    plot_atom_coefficient_comparison_heatmap,
     plot_coefficient_stability,
+    plot_coeffs_by_angular_momentum,
+    plot_coeffs_vs_coeffs_by_atom,
+    plot_embedding_comparison,
     plot_isclose_analysis,
     plot_l_value_analysis,
+    plot_theoretical_vs_actual_comparison,
+    plot_transformation_coefficient_comparison,
     plot_transformation_comparison,
 )
 from scdp.scripts.preprocess import get_atomic_number_table_from_zs
@@ -40,7 +47,7 @@ def main():
     # Configuration
     z_table = get_atomic_number_table_from_zs(np.arange(100).tolist())
     metadata = "caffeine"
-    mol_file = "caffeine.sdf"
+    mol_file = "caffeine_1.sdf"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dimensional_padding = 2.0
     resolution = 0.25
@@ -193,24 +200,71 @@ def main():
     # Collect coefficients for all rotations
     all_coeffs = []
     all_expo_scaling = []
-
+    all_embeddings = []
     # Process each rotation and get the predicted coefficients
     with torch.no_grad():
         for i, batch in enumerate(loader):
             print(f"Processing rotation {i}")
             batch = batch.to(device)
             # Get the model's predicted coefficients for this rotation
-            coeffs, expo_scaling = model.predict_coeffs(batch)
+            coeffs, expo_scaling, embeddings = model.predict_coeffs(batch)
             all_coeffs.append(coeffs.cpu())
+            all_embeddings.append(embeddings.cpu())
             if expo_scaling is not None:
                 all_expo_scaling.append(expo_scaling.cpu())
 
+    # write embeddings to file
+    with open("embeddings.pkl", "wb") as f:
+        pickle.dump(all_embeddings, f)
+
+    all_embeddings_tensor = torch.stack(all_embeddings)
     # Convert to tensor for easier analysis
     all_coeffs_tensor = torch.stack(all_coeffs)
     print(f"Collected coefficients shape: {all_coeffs_tensor.shape}")
 
     # Extract L-value mapping from the model to analyze by angular momentum
     coeff_to_l_mapping = extract_l_mapping(model, atom_types)
+
+    # Create rotation names for plotting
+    rotation_names = ["90-degree rotation", "Identity (no rotation)"]
+    rotation_names.extend([f"Random rotation {i}" for i in range(num_rotations)])
+
+    # Create embedding comparison plot
+    plot_embedding_comparison(
+        model,
+        all_embeddings_tensor,
+        atom_types=atom_types,
+        transformation_names=rotation_names,
+        title="Embedding Comparison Under Rotation",
+        filename="rotation_embedding_comparison.png",
+        lmax_list=model.model.lmax_list,
+        mmax_list=model.model.mmax_list,
+        rotation_matrices=rotations,
+    )
+    exit(0)
+    # Create pairwise comparison plot between all rotations and the identity (no rotation)
+    # The identity rotation is at index 1
+    identity_coeffs = all_coeffs_tensor[1]
+
+    # Create a list of coefficients excluding the identity
+    rotated_coeffs_without_identity = torch.cat(
+        [
+            all_coeffs_tensor[:1],  # 90-degree rotation
+            all_coeffs_tensor[2:],  # Random rotations
+        ]
+    )
+
+    # Create rotation names without identity
+    rotation_names_without_identity = [rotation_names[0]] + rotation_names[2:]
+
+    # Create the pairwise comparison plot
+    plot_transformation_coefficient_comparison(
+        identity_coeffs,
+        rotated_coeffs_without_identity,
+        rotation_names_without_identity,
+        title_prefix="Rotations vs. Original (No Rotation)",
+        filename="rotation_vs_original_coefficient_comparison.png",
+    )
 
     # Compare the first two rotations (90-degree vs identity)
     if len(all_coeffs) >= 2:
@@ -254,6 +308,46 @@ def main():
         filename="rotation_coefficient_stability.png",
     )
 
+    # Create visualization of coefficients organized by angular momentum
+    plot_coeffs_by_angular_momentum(
+        all_coeffs_tensor[1],  # Use the identity rotation coefficients
+        atom_types,
+        coeff_to_l_mapping,
+        title="Coefficients by Angular Momentum (No Rotation)",
+        filename="coeffs_by_angular_momentum_identity.png",
+    )
+
+    # Compare coefficients from 90-degree rotation and identity by angular momentum
+    if len(all_coeffs_tensor) >= 2:
+        plot_coeffs_by_angular_momentum(
+            [all_coeffs_tensor[1], all_coeffs_tensor[0]],  # [identity, 90-degree]
+            atom_types,
+            coeff_to_l_mapping,
+            title="Coefficient Comparison by Angular Momentum (Identity vs 90-degree)",
+            filename="coeffs_by_angular_momentum_comparison.png",
+        )
+
+    # Create heatmap comparing coefficients for specific atoms
+    # First, analyze the first atom (index 0)
+    plot_atom_coefficient_comparison_heatmap(
+        all_coeffs_tensor,
+        atom_types=atom_types,
+        atom_indices=[0],  # Just the first atom
+        transformation_names=rotation_names,
+        title="Coefficient Comparison Under Rotation",
+        filename="rotation_coeff_heatmap_atom0.png",
+    )
+
+    # Then, analyze all carbon atoms (atomic number 6)
+    plot_atom_coefficient_comparison_heatmap(
+        all_coeffs_tensor,
+        atom_types=atom_types,
+        atom_type_filter=8,  # Carbon atoms
+        transformation_names=rotation_names,
+        title="Carbon Atom Coefficient Comparison Under Rotation",
+        filename="rotation_coeff_heatmap_carbon.png",
+    )
+
 
 def compare_with_theoretical_predictions(
     model, all_coeffs_tensor, rotations, atom_types, coeff_to_l_mapping, device
@@ -281,6 +375,9 @@ def compare_with_theoretical_predictions(
     max_rel_diffs = []
     rotation_labels = []
 
+    # Create arrays to store theoretical predictions for visualization
+    theoretical_coeffs = []
+
     # Only compare rotations, skip the identity rotation (index 1)
     rotation_indices = [i for i in range(num_rotations) if i != 1]
 
@@ -299,6 +396,9 @@ def compare_with_theoretical_predictions(
             rotation_matrix=rotation_matrix,
             device=device,
         )
+
+        # Store for later visualization
+        theoretical_coeffs.append(theo_coeffs.cpu())
 
         # Compare theoretical predictions with actual rotated coefficients using coeff_transform_utils
         close_mask, agreement_percentage, mean_rel_diff, max_rel_diff, l_value_stats = (
@@ -345,6 +445,39 @@ def compare_with_theoretical_predictions(
                 title="Theoretical vs. Actual Coefficient Agreement by L Value",
                 filename="theoretical_prediction_by_l_value.png",
             )
+
+            # Create atom-by-atom coefficient scatter plots for the 90-degree rotation
+            plot_coeffs_vs_coeffs_by_atom(
+                theo_coeffs.cpu(),
+                actual_coeffs,
+                atom_types=atom_types,
+                title=f"Theoretical vs Actual Coefficients - {rotation_name}",
+                filename="theo_vs_actual_coeffs_by_atom_90deg.png",
+            )
+
+            # Create visualization comparing theoretical and actual coefficients by angular momentum
+            plot_coeffs_by_angular_momentum(
+                [theo_coeffs.cpu(), actual_coeffs],
+                atom_types,
+                coeff_to_l_mapping,
+                title=f"Theoretical vs Actual Coefficients by Angular Momentum - {rotation_name}",
+                filename="theo_vs_actual_coeffs_by_l_90deg.png",
+            )
+
+    # Convert to tensor for visualization
+    theoretical_coeffs_tensor = torch.stack(theoretical_coeffs)
+
+    # Extract actual coefficients for the rotations we analyzed
+    actual_rotation_coeffs = all_coeffs_tensor[rotation_indices]
+
+    # Create comprehensive comparison of theoretical vs actual coefficients
+    plot_theoretical_vs_actual_comparison(
+        theoretical_coeffs_tensor,
+        actual_rotation_coeffs,
+        rotation_labels,
+        title_prefix="Wigner-D Predicted vs. Model Predicted Coefficients",
+        filename="rotation_theoretical_vs_actual_grid.png",
+    )
 
     # Create comparison visualization for all rotations
     plot_transformation_comparison(
