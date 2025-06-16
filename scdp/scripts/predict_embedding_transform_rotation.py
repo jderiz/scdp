@@ -59,7 +59,7 @@ def predict_transformed_embedding_rotation(
         num_internal_coeffs = (internal_lmax + 1) ** 2
 
         # Get num_atoms and ensure channels match
-        num_atoms, n_coeffs_in = embedding_original.shape
+        num_atoms, n_coeffs_in, n_channels_in = embedding_original.shape
 
         if n_coeffs_in != num_internal_coeffs:
             raise ValueError(

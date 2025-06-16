@@ -11,7 +11,7 @@ from scdp.scripts.preprocess import get_atomic_number_table_from_zs
 z_table = get_atomic_number_table_from_zs(np.arange(100).tolist())
 
 metadata = "caffeine"
-mol_file = "caffeine.sdf"
+mol_file = "caffeine_1.sdf"
 
 # metadata='test'
 # mol_file='/home/iwe20/Projects/scdp/experiments/1.001_100.sdf'

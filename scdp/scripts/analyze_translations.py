@@ -18,7 +18,10 @@ from scdp.scripts.plotting_helpers import (
     analyze_by_l_value,
     analyze_coefficient_stability,
     compare_coefficient_pairs,
+    plot_atom_coefficient_comparison_heatmap,
     plot_coefficient_stability,
+    plot_coeffs_by_angular_momentum,
+    plot_coeffs_vs_coeffs_by_atom,
     plot_isclose_analysis,
     plot_transformation_comparison,
 )
@@ -33,7 +36,7 @@ def main():
     # Configuration
     z_table = get_atomic_number_table_from_zs(np.arange(100).tolist())
     metadata = "caffeine"
-    mol_file = "caffeine.sdf"
+    mol_file = "caffeine_1.sdf"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dimensional_padding = 2.0
     resolution = 0.25
@@ -232,6 +235,51 @@ def main():
         relative_std,
         title="Coefficient Stability Under Translation",
         filename="translation_coefficient_stability.png",
+    )
+
+    # Create visualization of coefficients organized by angular momentum
+    plot_coeffs_by_angular_momentum(
+        all_coeffs_tensor[
+            0
+        ],  # Use the identity translation coefficients (no translation)
+        atom_types,
+        coeff_to_l_mapping,
+        title="Coefficients by Angular Momentum (No Translation)",
+        filename="coeffs_by_angular_momentum_no_translation.png",
+    )
+
+    # Compare coefficients from no translation and x-axis translation by angular momentum
+    if len(all_coeffs_tensor) >= 2:
+        plot_coeffs_by_angular_momentum(
+            [
+                all_coeffs_tensor[0],
+                all_coeffs_tensor[1],
+            ],  # [no translation, x-axis translation]
+            atom_types,
+            coeff_to_l_mapping,
+            title="Coefficient Comparison by Angular Momentum (No Translation vs X-Axis)",
+            filename="coeffs_by_angular_momentum_translation_comparison.png",
+        )
+
+    # Create heatmap comparing coefficients for specific atoms
+    # First, analyze the first atom (index 0)
+    plot_atom_coefficient_comparison_heatmap(
+        all_coeffs_tensor,
+        atom_types=atom_types,
+        atom_indices=[0],  # Just the first atom
+        transformation_names=translation_names,
+        title="Coefficient Comparison Under Translation",
+        filename="translation_coeff_heatmap_atom0.png",
+    )
+
+    # Then, analyze all carbon atoms (atomic number 6)
+    plot_atom_coefficient_comparison_heatmap(
+        all_coeffs_tensor,
+        atom_types=atom_types,
+        atom_type_filter=6,  # Carbon atoms
+        transformation_names=translation_names,
+        title="Carbon Atom Coefficient Comparison Under Translation",
+        filename="translation_coeff_heatmap_carbon.png",
     )
 
     # Create comprehensive visualization comparing all translations
@@ -479,6 +527,36 @@ def compare_with_theoretical_predictions(
         agreement_percentages.append(agreement_percentage)
         mean_rel_diffs.append(mean_rel_diff)
         max_rel_diffs.append(max_rel_diff)
+
+        # For the first translation (typically x-axis), create detailed visualizations
+        if i == 1:  # First translation after identity
+            # Create visualization comparing theoretical and actual coefficients
+            plot_coeffs_vs_coeffs_by_atom(
+                theo_coeffs.cpu(),
+                actual_coeffs,
+                atom_types=atom_types,
+                title=f"Theoretical vs Actual Coefficients - {translation_name}",
+                filename="theo_vs_actual_coeffs_by_atom_translation.png",
+            )
+
+            # Create visualization comparing theoretical and actual coefficients by angular momentum
+            plot_coeffs_by_angular_momentum(
+                [theo_coeffs.cpu(), actual_coeffs],
+                atom_types,
+                coeff_to_l_mapping,
+                title=f"Theoretical vs Actual Coefficients by Angular Momentum - {translation_name}",
+                filename="theo_vs_actual_coeffs_by_l_translation.png",
+            )
+
+            # Plot isclose analysis for this translation
+            plot_isclose_analysis(
+                close_mask,
+                atom_types,
+                coeff_to_l_mapping,
+                l_value_stats,
+                title_prefix=f"Theoretical vs Actual - {translation_name}",
+                filename="theoretical_vs_actual_translation_analysis.png",
+            )
 
     # Create comparison visualization for all translations
     plot_transformation_comparison(
